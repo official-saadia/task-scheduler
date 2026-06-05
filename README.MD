@@ -39,7 +39,7 @@ A production-grade task scheduling system built with Java and Spring Boot. Desig
 
 ### Architecture Diagram
 
-![Task Scheduler Architecture Diagram](../../../../Downloads/task_scheduler_architecture_final.svg"/>
+![Task Scheduler Architecture Diagram](src/main/resources/static/task_scheduler_architecture_final.svg"/>
 
 
 ## ERD
