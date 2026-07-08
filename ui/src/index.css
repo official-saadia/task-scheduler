@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surfaces — white/light like Google */
+  --color-base: #ffffff;
+  --color-surface: #f8f9fa;
+  --color-surface-raised: #f1f3f4;
+  --color-border-soft: #e0e0e0;
+
+  /* Text */
+  --color-ink: #202124;
+  --color-ink-muted: #5f6368;
+  --color-ink-faint: #9aa0a6;
+
+  /* Google-inspired status system */
+  --color-status-scheduled: #4285F4;   /* Google Blue   — scheduled / info */
+  --color-status-running:   #FBBC05;   /* Google Yellow — running / processing */
+  --color-status-failed:    #EA4335;   /* Google Red    — failed / DLQ */
+  --color-status-success:   #34A853;   /* Google Green  — success */
+
+  /* Soft tints for badge backgrounds */
+  --color-status-scheduled-soft: #e8f0fe;
+  --color-status-running-soft:   #fef9e0;
+  --color-status-failed-soft:    #fce8e6;
+  --color-status-success-soft:   #e6f4ea;
+
+  /* Brand accent — Google Blue */
+  --color-accent: #4285F4;
+
+  /* Fonts */
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  * {
+    @apply border-[color:var(--color-border-soft)];
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-[color:var(--color-base)] text-[color:var(--color-ink)] font-[var(--font-body)] antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-[var(--font-display)] tracking-tight;
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: white;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--color-surface); }
+  ::-webkit-scrollbar-thumb { background: var(--color-border-soft); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-ink-faint); }
+}
+
+@layer components {
+  .pulse-dot {
+    position: relative;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--color-status-success);
+  }
+
+  .pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background-color: var(--color-status-success);
+    animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes pulse-ring {
+    0% { transform: scale(1); opacity: 0.6; }
+    75%, 100% { transform: scale(2.5); opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-dot::after { animation: none; }
+  }
+}
