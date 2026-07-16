@@ -162,7 +162,7 @@ function TemplateDataEditor({ taskId, templates }) {
   if (loading) return <LoadingState />
 
   return (
-    <div className="rounded-xl border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface)] p-5">
+    <div className="rounded-xl border border-[color:var(--color-border-soft)] bg-white p-5">
       <ErrorBanner message={error} />
       {success && (
         <p className="mb-4 text-sm" style={{ color: 'var(--color-status-success)' }}>

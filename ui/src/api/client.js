@@ -47,3 +47,25 @@ export function getErrorMessage(error) {
     'Something went wrong. Please try again.'
   )
 }
+
+/**
+ * Blob-aware variant of getErrorMessage.
+ *
+ * Requests made with `responseType: 'blob'` (e.g. the DLQ XLSX export) receive
+ * their *error* bodies as Blobs too, so `error.response.data.message` is
+ * undefined and getErrorMessage falls back to a useless "Request failed with
+ * status code 400". This reads the Blob back as text and recovers the
+ * GlobalExceptionHandler payload.
+ */
+export async function getErrorMessageAsync(error) {
+  const data = error?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text())
+      return parsed.message || parsed.error || getErrorMessage(error)
+    } catch {
+      // Not JSON — fall through to the sync reader.
+    }
+  }
+  return getErrorMessage(error)
+}

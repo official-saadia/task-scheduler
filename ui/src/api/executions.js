@@ -20,4 +20,11 @@ export const dlqApi = {
 
   updateStatus: (id, status) =>
     apiClient.patch(`/task-dlq/${id}/status`, null, { params: { status } }).then((res) => res.data),
+
+  // params is either { dateRange } for a preset window,
+  // or { from, to } (ISO yyyy-MM-dd) for a custom one.
+  export: (params) =>
+    apiClient
+      .get('/task-dlq/export', { params, responseType: 'blob' })
+      .then((res) => res.data),
 }

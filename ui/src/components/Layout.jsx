@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, ListChecks, FileText,
-  Database, Mail, History, AlertTriangle, LogOut,
+  Database, Mail, HardDriveDownload, FileBarChart2, History, AlertTriangle, LogOut,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -11,11 +11,11 @@ const NAV_ITEMS = [
   { to: '/templates', label: 'Templates', icon: FileText },
   { to: '/template-data', label: 'Template Data', icon: Database },
   { to: '/smtp', label: 'SMTP Configs', icon: Mail },
+  { to: '/backup-configurations', label: 'Backup Configs', icon: HardDriveDownload },
+  { to: '/report-configurations', label: 'Report Configs', icon: FileBarChart2 },
   { to: '/executions', label: 'Executions', icon: History },
   { to: '/dlq', label: 'Dead Letter Queue', icon: AlertTriangle },
 ]
-
-const GOOGLE_COLORS = ['#4285F4', '#EA4335', '#FBBC05', '#34A853']
 
 function LogoMark({ size = 28 }) {
   const half = size / 2 - 1
@@ -34,16 +34,11 @@ function LogoMark({ size = 28 }) {
 function LogoWordmark({ size = 'base' }) {
   const text = 'Task Scheduler'
   return (
-    <span className={`font-semibold leading-none font-[var(--font-display)] text-${size}`}>
-      {text.split('').map((char, i) =>
-        char === ' ' ? (
-          <span key={i}>&nbsp;</span>
-        ) : (
-          <span key={i} style={{ color: GOOGLE_COLORS[i % 4] }}>
-            {char}
-          </span>
-        )
-      )}
+    <span
+      className={`font-semibold leading-none font-[var(--font-display)] text-${size}`}
+      style={{ color: 'var(--color-heading)' }}
+    >
+      {text}
     </span>
   )
 }
@@ -68,7 +63,7 @@ export default function Layout() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
-          {NAV_ITEMS.map(({ to, label, icon: Icon }, idx) => (
+          {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -76,12 +71,9 @@ export default function Layout() {
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                   isActive
-                    ? 'text-white'
+                    ? 'text-white bg-[color:var(--color-accent)]'
                     : 'text-[color:var(--color-ink-muted)] hover:bg-[color:var(--color-surface-raised)] hover:text-[color:var(--color-ink)]'
                 }`
-              }
-              style={({ isActive }) =>
-                isActive ? { backgroundColor: GOOGLE_COLORS[idx % 4] } : {}
               }
             >
               <Icon size={17} />
@@ -119,7 +111,7 @@ export default function Layout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto bg-[color:var(--color-surface)]">
+        <main className="flex-1 overflow-y-auto bg-white">
           <div className="mx-auto max-w-6xl px-8 py-8">
             <Outlet />
           </div>

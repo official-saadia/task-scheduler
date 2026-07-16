@@ -4,8 +4,6 @@ import { useAuth } from '../context/AuthContext'
 import { getErrorMessage } from '../api/client'
 import { Field, Input, PrimaryButton, ErrorBanner } from '../components/FormControls'
 
-const GOOGLE_COLORS = ['#4285F4', '#EA4335', '#FBBC05', '#34A853']
-
 function LogoMark() {
   return (
     <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
@@ -20,14 +18,11 @@ function LogoMark() {
 function LogoWordmark() {
   const text = 'Task Scheduler'
   return (
-    <span className="text-2xl font-semibold leading-none font-[var(--font-display)]">
-      {text.split('').map((char, i) =>
-        char === ' ' ? (
-          <span key={i}>&nbsp;</span>
-        ) : (
-          <span key={i} style={{ color: GOOGLE_COLORS[i % 4] }}>{char}</span>
-        )
-      )}
+    <span
+      className="text-2xl font-semibold leading-none font-[var(--font-display)]"
+      style={{ color: 'var(--color-heading)' }}
+    >
+      {text}
     </span>
   )
 }

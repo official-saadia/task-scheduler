@@ -4,13 +4,13 @@
   /* Surfaces — white/light like Google */
   --color-base: #ffffff;
   --color-surface: #f8f9fa;
-  --color-surface-raised: #f1f3f4;
-  --color-border-soft: #e0e0e0;
+  --color-surface-raised: #dbeafe;
+  --color-border-soft: #bfdbfe;
 
   /* Text */
-  --color-ink: #202124;
-  --color-ink-muted: #5f6368;
-  --color-ink-faint: #9aa0a6;
+  --color-ink: #1e3a5f;
+  --color-ink-muted: #3d5a80;
+  --color-ink-faint: #8497b0;
 
   /* Google-inspired status system */
   --color-status-scheduled: #4285F4;   /* Google Blue   — scheduled / info */
@@ -26,6 +26,12 @@
 
   /* Brand accent — Google Blue */
   --color-accent: #4285F4;
+
+  /* Headings */
+  --color-heading: #1d4ed8;
+
+  /* Table row striping */
+  --color-row-alt: #f1f3f4;
 
   /* Fonts */
   --font-display: "Space Grotesk", sans-serif;
@@ -48,6 +54,7 @@
 
   h1, h2, h3, h4 {
     @apply font-[var(--font-display)] tracking-tight;
+    color: var(--color-heading);
   }
 
   ::selection {

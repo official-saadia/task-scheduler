@@ -53,7 +53,7 @@ export default function TaskExecutions() {
               </thead>
               <tbody>
                 {executions.map((e) => (
-                  <tr key={e.id} className="border-b border-[color:var(--color-border-soft)] last:border-0 hover:bg-[color:var(--color-surface)] transition-colors">
+                  <tr key={e.id} className="border-b border-[color:var(--color-border-soft)] last:border-0 odd:bg-white even:bg-[color:var(--color-row-alt)] hover:bg-[color:var(--color-status-scheduled-soft)] transition-colors">
                     <td className="px-4 py-3 font-[var(--font-mono)] text-xs">#{e.id}</td>
                     <td className="px-4 py-3">{e.task?.name || `#${e.task?.id ?? '—'}`}</td>
                     <td className="px-4 py-3"><StatusBadge status={e.status} /></td>

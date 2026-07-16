@@ -7,6 +7,8 @@ import Tasks from './pages/Tasks'
 import Templates from './pages/Templates'
 import TaskTemplateData from './pages/TaskTemplateData'
 import SmtpConfigurations from './pages/SmtpConfigurations'
+import BackupConfigurations from './pages/BackupConfigurations'
+import ReportConfigurations from './pages/ReportConfigurations'
 import TaskExecutions from './pages/TaskExecutions'
 import DeadLetterQueue from './pages/DeadLetterQueue'
 
@@ -27,6 +29,8 @@ export default function App() {
         <Route path="/templates" element={<Templates />} />
         <Route path="/template-data" element={<TaskTemplateData />} />
         <Route path="/smtp" element={<SmtpConfigurations />} />
+        <Route path="/backup-configurations" element={<BackupConfigurations />} />
+        <Route path="/report-configurations" element={<ReportConfigurations />} />
         <Route path="/executions" element={<TaskExecutions />} />
         <Route path="/dlq" element={<DeadLetterQueue />} />
       </Route>
