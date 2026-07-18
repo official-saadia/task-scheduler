@@ -103,6 +103,23 @@ public class BoundedPriorityTaskQueue {
     }
 
     /**
+     * Returns {@code true} if a task with the given id is currently queued.
+     *
+     * <p>Used by the retry sweep to avoid re-queueing a retry for a task that
+     * already has a fresh run waiting — {@link #offerRetry(QueuedTask)}
+     * deliberately bypasses the duplicate check, so the caller guards against
+     * that collision itself. A weakly-consistent read against the live queue;
+     * a task can still be polled the instant after this returns, so it narrows
+     * the double-run window rather than closing it outright.</p>
+     *
+     * @param taskId the task id to look for
+     * @return {@code true} if the task is present in the queue
+     */
+    public boolean contains(Long taskId) {
+        return queue.stream().anyMatch(q -> q.getTaskId().equals(taskId));
+    }
+
+    /**
      * Returns the current number of tasks in the queue.
      *
      * @return the queue size

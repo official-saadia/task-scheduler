@@ -39,6 +39,7 @@ app:
     max-retries: ${SCHEDULER_MAX_RETRIES:3}
     retry-delay-ms: ${SCHEDULER_RETRY_DELAY_MS:5000}
     polling-interval-ms: ${SCHEDULER_POLLING_INTERVAL_MS:10000}
+    retry-queue-poll-ms: ${SCHEDULER_RETRY_QUEUE_POLL_MS:1000}
 
 server:
   port: 8080

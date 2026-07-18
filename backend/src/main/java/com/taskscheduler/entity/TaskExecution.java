@@ -23,7 +23,7 @@ public class TaskExecution {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "task_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "smtpConfiguration"})
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "smtpConfiguration", "backupConfiguration", "reportConfiguration"})
     private Task task;
 
     @Enumerated(EnumType.STRING)
@@ -50,6 +50,14 @@ public class TaskExecution {
     @JsonIgnoreProperties({"taskExecution"})
     @OneToMany(mappedBy = "taskExecution", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<EmailNotification> emailNotifications;
+
+    @JsonIgnoreProperties({"taskExecution"})
+    @OneToMany(mappedBy = "taskExecution", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<BackupExecution> backupExecutions;
+
+    @JsonIgnoreProperties({"taskExecution"})
+    @OneToMany(mappedBy = "taskExecution", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<ReportGenerationExecution> reportExecutions;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

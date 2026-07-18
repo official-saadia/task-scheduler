@@ -1,0 +1,73 @@
+name: task-scheduler
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: task_scheduler
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      # 3307 on the host so this doesn't collide with a MySQL you already run.
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      mysql:
+        # Not just "started" — Flyway runs on boot and will fail against a
+        # MySQL that is up but not yet accepting connections.
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/task_scheduler
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+
+      JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+
+      # backup.sh defaults to localhost, which inside this container is the JVM,
+      # not the database. It reaches MySQL by service name.
+      DB_HOST: mysql
+      DB_NAME: task_scheduler
+      DB_USER: root
+      DB_PASS: ${MYSQL_ROOT_PASSWORD:-root}
+
+      # dlq_report.sh calls the API from inside this same container, so
+      # localhost IS correct here — unlike DB_HOST above.
+      API_BASE: http://localhost:8080/api/v1
+      API_USER: ${ADMIN_USERNAME:-admin}
+      API_PASS: ${ADMIN_PASSWORD:-admin123}
+    volumes:
+      # Named volumes, so a generated report survives `docker compose down`.
+      - reports:/opt/reports
+      - backups:/opt/backups
+    ports:
+      - "8080:8080"
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+      args:
+        # Relative path -> the browser calls nginx, nginx proxies to backend.
+        VITE_API_BASE_URL: /api/v1
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  mysql-data:
+  reports:
+  backups:

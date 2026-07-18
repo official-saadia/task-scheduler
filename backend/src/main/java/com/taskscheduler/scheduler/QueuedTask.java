@@ -27,6 +27,15 @@ public class QueuedTask implements Comparable<QueuedTask> {
     private final int retryCount;
 
     /**
+     * The {@code task_executions} row this attempt belongs to, or {@code null} for a
+     * fresh run that has not created one yet.
+     *
+     * <p>A retry carries the id forward so the whole run — every attempt — stays on a
+     * single execution row, rather than each attempt minting its own.</p>
+     */
+    private final Long taskExecutionId;
+
+    /**
      * Constructs a {@code QueuedTask} from a {@link Task} entity.
      * Calculates the next execution time from the task's cron expression.
      *
@@ -39,22 +48,27 @@ public class QueuedTask implements Comparable<QueuedTask> {
         this.nextExecutionTime = resolveNextExecutionTime(task.getCronExpression());
         this.createdAt = task.getCreatedAt();
         this.retryCount = 0;
+        this.taskExecutionId = null;
     }
 
     /**
      * Constructs a {@code QueuedTask} for a retry attempt.
-     * Carries the existing retry count from the previous execution attempt.
      *
-     * @param task       the task entity to retry
-     * @param retryCount the number of previous failed attempts
+     * <p>Carries both the retry count and the id of the execution row this run
+     * already owns, so the retry continues that run instead of starting a new one.</p>
+     *
+     * @param task            the task entity to retry
+     * @param retryCount      the number of previous failed attempts
+     * @param taskExecutionId the execution row this run is already recorded against
      */
-    public QueuedTask(Task task, int retryCount) {
+    public QueuedTask(Task task, int retryCount, Long taskExecutionId) {
         this.taskId = task.getId();
         this.taskName = task.getName();
         this.cronExpression = task.getCronExpression();
         this.nextExecutionTime = LocalDateTime.now();
         this.createdAt = task.getCreatedAt();
         this.retryCount = retryCount;
+        this.taskExecutionId = taskExecutionId;
     }
 
     /**

@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,6 +45,7 @@ import java.util.concurrent.Executor;
 public class TaskExecutorEngine {
 
     private final BoundedPriorityTaskQueue taskQueue;
+    private final RetryQueue retryQueue;
     private final TaskRepository taskRepository;
     private final TaskExecutionRepository taskExecutionRepository;
     private final TaskExecutionLogRepository taskExecutionLogRepository;
@@ -105,22 +107,62 @@ public class TaskExecutorEngine {
         }
 
         Task task = taskOptional.get();
-        TaskExecution taskExecution = createTaskExecution(task, queuedTask.getRetryCount());
+        TaskExecution taskExecution = resolveTaskExecution(task, queuedTask);
+        if (taskExecution == null) {
+            return;
+        }
         registerSession(taskExecution, task, queuedTask.getRetryCount());
+
+        int attemptNo = queuedTask.getRetryCount() + 1;
 
         try {
             TaskHandler handler = taskHandlerRegistry.getHandler(task.getType());
             handler.execute(task, taskExecution);
 
+            logAttempt(taskExecution, ExecutionStatus.COMPLETED, null, attemptNo);
             markExecutionCompleted(taskExecution);
             removeSession(taskExecution.getId());
 
-            log.info("TaskExecutorEngine: Task [{}] '{}' completed successfully.",
-                    task.getId(), task.getName());
+            log.info("TaskExecutorEngine: Task [{}] '{}' completed successfully on attempt {}.",
+                    task.getId(), task.getName(), attemptNo);
 
         } catch (Exception ex) {
             handleExecutionFailure(task, taskExecution, queuedTask, ex);
         }
+    }
+
+    /**
+     * Returns the execution row this attempt belongs to.
+     *
+     * <p>A fresh run creates one. A retry loads the row the run already owns and
+     * advances its {@code retryCount}, so all attempts of a run share a single
+     * {@code task_executions} record and the per-attempt detail lives in
+     * {@code task_execution_logs}.</p>
+     *
+     * @param task       the task being executed
+     * @param queuedTask the dequeued task
+     * @return the execution record, or {@code null} if a retry's execution row has vanished
+     */
+    private TaskExecution resolveTaskExecution(Task task, QueuedTask queuedTask) {
+        if (queuedTask.getTaskExecutionId() == null) {
+            return createTaskExecution(task, queuedTask.getRetryCount());
+        }
+
+        Optional<TaskExecution> existing =
+                taskExecutionRepository.findById(queuedTask.getTaskExecutionId());
+
+        if (existing.isEmpty()) {
+            log.error("TaskExecutorEngine: Task [{}] retry references execution [{}], which no longer "
+                            + "exists. Skipping.",
+                    task.getId(), queuedTask.getTaskExecutionId());
+            return null;
+        }
+
+        TaskExecution taskExecution = existing.get();
+        // Handlers read attemptNo off retryCount, so it must reflect this attempt.
+        taskExecution.setRetryCount(queuedTask.getRetryCount());
+        taskExecution.setStatus(ExecutionStatus.IN_PROGRESS);
+        return taskExecutionRepository.save(taskExecution);
     }
 
     /**
@@ -138,46 +180,70 @@ public class TaskExecutorEngine {
         log.error("TaskExecutorEngine: Task [{}] '{}' failed on attempt {}. Reason: {}",
                 task.getId(), task.getName(), attemptNo, ex.getMessage());
 
-        logFailedAttempt(taskExecution, ex.getMessage(), attemptNo);
-        markExecutionFailed(taskExecution);
+        logAttempt(taskExecution, ExecutionStatus.FAILED, ex.getMessage(), attemptNo);
         removeSession(taskExecution.getId());
 
         if (queuedTask.getRetryCount() < maxRetries - 1) {
-            scheduleRetry(task, queuedTask);
+            // The run is not over, so the execution row stays IN_PROGRESS. Marking it
+            // FAILED here would make a run that later succeeds look like it failed —
+            // and IN_PROGRESS is also what lets the retry queue be rebuilt after a
+            // crash (see RetryQueueEngine), since a FAILED row means retries exhausted.
+            enqueueRetry(task, queuedTask, taskExecution.getId());
         } else {
+            markExecutionFailed(taskExecution);
             moveTaskToDlq(task, taskExecution, ex.getMessage());
         }
     }
 
     /**
-     * Schedules a retry by requeueing the task with an incremented retry count
-     * after a configurable delay.
+     * Parks a failed attempt in the {@link RetryQueue} to be re-queued once its
+     * delay elapses, then returns immediately — the calling pool thread is freed
+     * rather than sleeping out the delay.
      *
-     * <p>Uses {@link BoundedPriorityTaskQueue#offerRetry(QueuedTask)} rather than
-     * {@link BoundedPriorityTaskQueue#offer(QueuedTask)} because retries are
-     * intentional re-executions and must not be rejected as duplicates of a
-     * fresh task with the same {@code taskId} that {@link TaskSchedulerEngine}
-     * may have queued in the interim — particularly for frequently-scheduled
-     * tasks during testing where polling cycles overlap with retry delays.</p>
+     * <p>The delay is enforced by {@link RetryQueueEngine}, which sweeps the retry
+     * queue and moves due entries onto the main queue via
+     * {@link BoundedPriorityTaskQueue#offerRetry(QueuedTask)}. That path bypasses
+     * the queue's duplicate-by-taskId check because a retry is a deliberate
+     * re-execution and must not be mistaken for a duplicate of a fresh run; the
+     * sweep does its own collision check before re-queueing.</p>
      *
-     * @param task       the task to retry
-     * @param queuedTask the failed queued task
+     * <p>The retry carries an incremented retry count and the id of the execution
+     * row this run already owns, so every attempt of a run stays on a single row.</p>
+     *
+     * @param task            the task to retry
+     * @param queuedTask      the failed queued task
+     * @param taskExecutionId the execution row this run already owns
      */
-    private void scheduleRetry(Task task, QueuedTask queuedTask) {
-        try {
-            Thread.sleep(retryDelayMs);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
-        QueuedTask retryTask = new QueuedTask(task, queuedTask.getRetryCount() + 1);
-        boolean requeued = taskQueue.offerRetry(retryTask);
-        log.info("TaskExecutorEngine: Task [{}] requeued for retry {}. Success: {}",
-                task.getId(), retryTask.getRetryCount(), requeued);
+    private void enqueueRetry(Task task, QueuedTask queuedTask, Long taskExecutionId) {
+        int nextRetryCount = queuedTask.getRetryCount() + 1;
+        LocalDateTime nextRetryTime = LocalDateTime.now().plus(Duration.ofMillis(retryDelayMs));
+        RetryEntry entry = new RetryEntry(task.getId(), taskExecutionId, nextRetryCount, nextRetryTime);
 
-        if (!requeued) {
-            log.error("TaskExecutorEngine: Task [{}] retry {} could not be requeued — queue full.",
-                    task.getId(), retryTask.getRetryCount());
+        boolean parked = retryQueue.schedule(entry);
+        if (parked) {
+            log.info("TaskExecutorEngine: Task [{}] parked for retry {} at {}.",
+                    task.getId(), nextRetryCount, nextRetryTime);
+        } else {
+            // A retry is already pending for this task — should not normally happen
+            // for a run in flight, but if it does, the existing one stands.
+            log.warn("TaskExecutorEngine: Task [{}] already has a pending retry; "
+                    + "not scheduling another.", task.getId());
         }
+    }
+
+    /**
+     * Returns {@code true} if the given task currently has an execution in flight.
+     *
+     * <p>The active-session map is keyed by execution id, so this scans the live
+     * sessions for a matching task id. Used by the retry sweep to avoid launching
+     * a retry while a fresh run of the same task is already executing.</p>
+     *
+     * @param taskId the task id to check
+     * @return {@code true} if an execution for the task is currently active
+     */
+    public boolean isTaskActive(Long taskId) {
+        return activeSessions.values().stream()
+                .anyMatch(s -> taskId.equals(s.getTaskId()));
     }
 
     /**
@@ -198,6 +264,28 @@ public class TaskExecutorEngine {
                 .status(DlqStatus.NEW)
                 .build();
         taskDlqRepository.save(dlqEntry);
+    }
+
+    /**
+     * Dead-letters a run whose retries were spent by crashes rather than clean failures.
+     *
+     * <p>Used by {@link RetryQueueEngine} on startup. An interrupted {@code IN_PROGRESS}
+     * attempt with no retries left never reached {@link #handleExecutionFailure} — the
+     * process died mid-run — so this is the only path that can move it to the DLQ instead
+     * of letting it be re-run forever. Records the interrupted attempt as {@code FAILED},
+     * marks the execution {@code FAILED}, and writes the DLQ entry, mirroring the terminal
+     * branch of a normal failure.</p>
+     *
+     * @param task          the owning task
+     * @param taskExecution the interrupted execution row
+     * @param attemptNo     the attempt that was interrupted ({@code retryCount + 1})
+     * @param failureReason reason recorded on both the attempt log and the DLQ entry
+     */
+    public void deadLetterInterrupted(Task task, TaskExecution taskExecution,
+                                      int attemptNo, String failureReason) {
+        logAttempt(taskExecution, ExecutionStatus.FAILED, failureReason, attemptNo);
+        markExecutionFailed(taskExecution);
+        moveTaskToDlq(task, taskExecution, failureReason);
     }
 
     /**
@@ -269,16 +357,24 @@ public class TaskExecutorEngine {
     }
 
     /**
-     * Logs a failed execution attempt in the {@code task_execution_logs} table.
+     * Logs a single execution attempt in the {@code task_execution_logs} table.
      *
-     * @param taskExecution the execution record
-     * @param message       the failure message
-     * @param attemptNo     the attempt number
+     * <p>Written for every attempt, successful or not. A {@link TaskExecution} is one
+     * row per run; this table is one row per attempt within it. A task that fails twice
+     * and succeeds on the third attempt leaves one {@code COMPLETED} execution and three
+     * logs, so the run reads as a single event while the attempts that got it there
+     * remain inspectable.</p>
+     *
+     * @param taskExecution the execution record this attempt belongs to
+     * @param status        the outcome of this attempt
+     * @param message       the failure reason, or {@code null} for a successful attempt
+     * @param attemptNo     the attempt number, starting at 1
      */
-    private void logFailedAttempt(TaskExecution taskExecution, String message, int attemptNo) {
+    private void logAttempt(TaskExecution taskExecution, ExecutionStatus status,
+                            String message, int attemptNo) {
         TaskExecutionLog executionLog = TaskExecutionLog.builder()
                 .taskExecution(taskExecution)
-                .status(ExecutionStatus.FAILED)
+                .status(status)
                 .attemptNo(attemptNo)
                 .message(message)
                 .build();

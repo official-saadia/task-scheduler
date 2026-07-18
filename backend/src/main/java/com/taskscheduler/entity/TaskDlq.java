@@ -22,12 +22,12 @@ public class TaskDlq {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "task_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "smtpConfiguration"})
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "smtpConfiguration", "backupConfiguration", "reportConfiguration"})
     private Task task;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "task_execution_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "logs", "emailNotifications", "task"})
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "logs", "emailNotifications", "backupExecutions", "reportExecutions", "task"})
     private TaskExecution taskExecution;
 
     @Column(name = "failure_reason", nullable = false, columnDefinition = "TEXT")

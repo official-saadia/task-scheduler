@@ -121,6 +121,25 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles {@link IllegalArgumentException} thrown when request parameters
+     * are structurally valid but semantically wrong — for example a DLQ export
+     * custom range whose {@code to} date precedes its {@code from} date.
+     *
+     * <p>Without this handler such errors fall through to
+     * {@link #handleGenericException} and surface as a {@code 500} with a
+     * generic message, hiding the actual reason from the caller.</p>
+     *
+     * @param ex      the exception carrying the caller-facing message
+     * @param request the HTTP request that triggered the exception
+     * @return a {@code 400 Bad Request} error response
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgumentException(
+            IllegalArgumentException ex, HttpServletRequest request) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "Invalid Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    /**
      * Handles all unhandled exceptions as a fallback to prevent exposing
      * internal stack traces to API consumers.
      *

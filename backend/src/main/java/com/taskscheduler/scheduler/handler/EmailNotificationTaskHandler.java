@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
 import java.time.LocalDateTime;
 
 /**
@@ -44,13 +45,16 @@ public class EmailNotificationTaskHandler implements TaskHandler {
      *
      * @param task          the task entity containing SMTP configuration
      * @param taskExecution the current execution record
-     * @throws TaskExecutionException    if all recipient emails fail to send
+     * @throws TaskExecutionException    if a configured attachment is missing, or
+     *                                   if all recipient emails fail to send
      * @throws ResourceNotFoundException if no template data exists for the task
      */
     @Override
     public void execute(Task task, TaskExecution taskExecution) {
         log.info("EmailNotificationTaskHandler: Executing task [{}] '{}'",
                 task.getId(), task.getName());
+
+        verifyAttachmentIsReadable(task);
 
         TaskTemplateData taskTemplateData = taskTemplateDataRepository
                 .findByTaskId(task.getId())
@@ -72,7 +76,8 @@ public class EmailNotificationTaskHandler implements TaskHandler {
                         message.recipient(),
                         message.subject(),
                         message.body(),
-                        task.getSmtpConfiguration()
+                        task.getSmtpConfiguration(),
+                        task.getAttachmentPath()
                 );
 
                 persistNotification(taskExecution, message.body(), message.recipient(),
@@ -97,6 +102,46 @@ public class EmailNotificationTaskHandler implements TaskHandler {
         if (successCount == 0) {
             throw new TaskExecutionException(
                     "All " + failureCount + " email(s) failed for task: " + task.getId());
+        }
+    }
+
+    /**
+     * Fails the task if it configures an attachment that is not on disk.
+     *
+     * <p>An attachment path is only ever set deliberately — typically pointing at
+     * a REPORT_GENERATION task's output file — so a missing file means the report
+     * never ran, failed, or wrote somewhere else. Sending the email anyway would
+     * deliver a message whose whole purpose was the attachment, and the recipient
+     * would have no way of knowing anything went wrong. Failing instead routes the
+     * task through the normal retry/DLQ path, where the missing path is visible
+     * and actionable.</p>
+     *
+     * <p>Checked before any email is dispatched, so a failure here means nothing
+     * was sent rather than some recipients getting an incomplete message.</p>
+     *
+     * @param task the task being executed
+     * @throws TaskExecutionException if the attachment is missing or unreadable
+     */
+    private void verifyAttachmentIsReadable(Task task) {
+        String attachmentPath = task.getAttachmentPath();
+
+        if (attachmentPath == null || attachmentPath.isBlank()) {
+            return;
+        }
+
+        File attachment = new File(attachmentPath);
+
+        if (!attachment.isFile()) {
+            throw new TaskExecutionException(
+                    "Attachment not found at '" + attachmentPath + "' for task: " + task.getId()
+                            + ". No emails were sent. The task that produces this file may have failed "
+                            + "or not run yet.");
+        }
+
+        if (!attachment.canRead()) {
+            throw new TaskExecutionException(
+                    "Attachment at '" + attachmentPath + "' exists but is not readable for task: "
+                            + task.getId() + ". No emails were sent.");
         }
     }
 

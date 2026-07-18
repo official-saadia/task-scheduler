@@ -7,6 +7,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -27,4 +29,14 @@ public interface TaskExecutionRepository extends JpaRepository<TaskExecution, Lo
     Optional<TaskExecution> findById(Long id);
 
     long countByStatus(ExecutionStatus status);
+
+    /**
+     * Fetches every execution in any of the given statuses, task eagerly loaded.
+     * Used once at startup to rebuild the in-memory retry queue from the rows a
+     * previous run left behind ({@code IN_PROGRESS}, and any {@code FAILED} row
+     * that still has retries left). Unpaginated by design: the set of interrupted
+     * runs is small and read exactly once.
+     */
+    @EntityGraph(attributePaths = {"task"})
+    List<TaskExecution> findByStatusIn(Collection<ExecutionStatus> statuses);
 }
