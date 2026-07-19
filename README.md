@@ -55,7 +55,7 @@ Adding a fourth means implementing `TaskHandler` and registering it — `TaskHan
 
 ## Architecture
 
-![Architecture](docs/task_scheduler_architecture_final.svg)
+![Architecture](docs/architecture.svg)
 
 The system has **two independent entry points** that meet only at the database:
 
@@ -112,7 +112,7 @@ Timeouts are enforced by draining the process's output on a separate thread whil
 
 ## Data model
 
-![ERD](docs/Task_Scheduler_ERD.drawio.png)
+![ERD](docs/erd.png)
 
 Twelve tables across four groups:
 

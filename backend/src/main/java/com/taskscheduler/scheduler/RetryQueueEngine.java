@@ -16,7 +16,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Drives the {@link RetryQueue}: promotes retries whose delay has elapsed onto
@@ -38,13 +42,24 @@ import java.util.List;
  * <p><b>Restart.</b> The retry queue is in-memory, so a crash loses it. On
  * startup it is rebuilt from the execution rows a previous run left behind:
  * every {@code IN_PROGRESS} row (a run that was mid-flight or between retries),
- * and any {@code FAILED} row that still has retries left. Both advance to their
- * next attempt — an interrupted {@code IN_PROGRESS} run counts the crash as a
- * consumed retry, so a run that only ever crashes eventually exhausts its budget
- * and is dead-lettered on restart rather than tying up a thread forever. A
- * {@code FAILED} run whose retries are already spent is in the DLQ and left
- * alone. {@code IN_PROGRESS} retries are due immediately; {@code FAILED} retries
- * wait out the remaining delay.</p>
+ * and any {@code FAILED} row that still has retries left.</p>
+ *
+ * <p><b>One resume per task.</b> Each scheduled occurrence of a task mints its
+ * own execution row, so a task that stopped and restarted several times can
+ * leave several interrupted rows behind. They are not all retried: the
+ * {@link RetryQueue} holds at most one pending retry per task, so retrying all
+ * of them would only see one survive the queue's dedup while the rest sat
+ * un-updated and reappeared on the next boot. Instead the rows are grouped by
+ * task and only the newest resumable row (highest id) resumes; every older one
+ * is marked {@link ExecutionStatus#SKIPPED}, its log naming the row that
+ * superseded it. A {@code FAILED} row whose retries are already spent is in the
+ * DLQ and is left untouched — not resumed, not skipped.</p>
+ *
+ * <p>The winning row advances to its next attempt. An interrupted
+ * {@code IN_PROGRESS} run counts the crash as a consumed retry, so a run that
+ * only ever crashes eventually exhausts its budget and is dead-lettered on
+ * restart rather than tying up a thread forever. {@code IN_PROGRESS} retries are
+ * due immediately; {@code FAILED} retries wait out the remaining delay.</p>
  *
  * <p><b>The restart caveat.</b> Re-running an interrupted {@code IN_PROGRESS}
  * run can repeat a side effect that had already happened — an email that was
@@ -68,6 +83,9 @@ public class RetryQueueEngine {
 
     @Value("${app.scheduler.retry-delay-ms:5000}")
     private long retryDelayMs;
+
+    /** The outcome of trying to resume a single interrupted run on startup. */
+    private enum RecoveryOutcome { RESCHEDULED, SKIPPED, DEAD_LETTERED }
 
     /**
      * Sweeps the retry queue and promotes every due retry onto the main queue,
@@ -155,25 +173,18 @@ public class RetryQueueEngine {
 
     /**
      * Rebuilds the retry queue from the execution rows a previous run left behind,
-     * so retries interrupted by a restart resume.
+     * so retries interrupted by a restart resume — one resume per task.
      *
-     * <p>Two kinds of row are recovered, and only while they still have attempts left:</p>
-     * <ul>
-     *   <li>{@code IN_PROGRESS} — a run that was mid-flight or between retries. Its
-     *       current attempt never finished, so it is re-run as the <em>same</em> attempt
-     *       (retry count unchanged) for an immediate retry ({@code nextRetryTime = now}):
-     *       the process was down, so any delay has effectively passed.</li>
-     *   <li>{@code FAILED} with retries left — a completed failed attempt that had not yet
-     *       exhausted its budget. It advances to its <em>next</em> attempt, due one retry
-     *       delay after it failed ({@code nextRetryTime = updatedAt + retry-delay}). A
-     *       {@code FAILED} row whose retries are spent is already in the DLQ and is left
-     *       alone; a DLQ-existence check guards against a raised {@code max-retries}
-     *       resurrecting one.</li>
-     * </ul>
+     * <p>The recoverable rows ({@code IN_PROGRESS}, or {@code FAILED} with retries
+     * left) are grouped by task. Within each task only the newest row resumes; the
+     * older ones are stale duplicates of the same task and are marked
+     * {@link ExecutionStatus#SKIPPED}, each log naming the row that superseded it.
+     * A {@code FAILED} row whose retries are spent is already in the DLQ and is
+     * left untouched.</p>
      *
-     * <p>A run whose next scheduled occurrence is already due is skipped instead of retried —
-     * the fresh run supersedes the interrupted one. Actual promotion, and the collision guards
-     * around it, are left to {@link #promoteDueRetries()}; this method only re-populates the queue.</p>
+     * <p>Actual promotion of the surviving retry, and the collision guards around
+     * it, are left to {@link #promoteDueRetries()}; this method only re-populates
+     * the queue and closes out the superseded rows.</p>
      */
     @EventListener(ApplicationReadyEvent.class)
     public void rebuildOnStartup() {
@@ -184,85 +195,145 @@ public class RetryQueueEngine {
             return;
         }
 
+        // Group interrupted rows by task. A task accumulates one row per scheduled occurrence,
+        // so several can be waiting here; they are resolved together, newest wins.
+        Map<Long, List<TaskExecution>> byTask = new LinkedHashMap<>();
+        for (TaskExecution execution : recoverable) {
+            Task task = execution.getTask();
+            if (task == null) {
+                log.error("RetryQueueEngine: Execution [{}] has no task. Leaving as-is.", execution.getId());
+                continue;
+            }
+            byTask.computeIfAbsent(task.getId(), k -> new ArrayList<>()).add(execution);
+        }
+
         LocalDateTime now = LocalDateTime.now();
         int rescheduled = 0;
         int skipped = 0;
         int leftAlone = 0;
         int deadLettered = 0;
 
-        for (TaskExecution execution : recoverable) {
-            try {
-                Task task = execution.getTask();
-                if (task == null) {
-                    log.error("RetryQueueEngine: Execution [{}] has no task. Leaving as-is.", execution.getId());
-                    continue;
-                }
+        for (List<TaskExecution> group : byTask.values()) {
+            // Newest execution row first: highest id is the most recently created run.
+            group.sort(Comparator.comparing(TaskExecution::getId).reversed());
 
-                // retryCount is retries, not attempts: attempt 1 + `retryCount` retries, so the
-                // attempt that was running/failed is retryCount + 1. Exhaustion is
-                // retryCount == maxRetries - 1 — the runtime's own DLQ boundary.
+            // Set aside rows that are already terminal. A FAILED run whose retries are spent is
+            // in the DLQ and must be left exactly as-is — not resumed, not skipped. What remains
+            // are runs that can still resume: any IN_PROGRESS row, or a FAILED row with budget left.
+            List<TaskExecution> resumable = new ArrayList<>();
+            for (TaskExecution execution : group) {
                 int retryCount = execution.getRetryCount() == null ? 0 : execution.getRetryCount();
-                boolean inProgress = execution.getStatus() == ExecutionStatus.IN_PROGRESS;
-
-                // Both statuses advance to the next attempt: a FAILED attempt is done, and an
-                // interrupted IN_PROGRESS attempt counts the crash as a consumed retry — so a run
-                // that only ever crashes eventually stops instead of tying up a thread forever.
-                int resumeRetryCount = retryCount + 1;
                 boolean exhausted = retryCount >= maxRetries - 1;
-
-                LocalDateTime nextRetryTime;
-                if (inProgress) {
-                    // Process was down, so no delay to wait out — due now.
-                    nextRetryTime = now;
+                if (execution.getStatus() == ExecutionStatus.FAILED && exhausted) {
+                    leftAlone++;
                 } else {
-                    // FAILED: the engine already processed this failure. If retries were spent it
-                    // is already in the DLQ; leave it. Otherwise it had parked a retry we lost with
-                    // the in-memory queue, so rebuild that retry due one delay after it failed.
-                    if (exhausted) {
-                        leftAlone++;
-                        continue;
-                    }
-                    LocalDateTime failedAt = execution.getUpdatedAt() == null ? now : execution.getUpdatedAt();
-                    nextRetryTime = failedAt.plus(Duration.ofMillis(retryDelayMs));
+                    resumable.add(execution);
                 }
+            }
+            if (resumable.isEmpty()) {
+                continue;
+            }
 
-                // A retry at or past the task's next scheduled run is pointless — the fresh run
-                // supersedes it — so skip rather than retry or dead-letter the interrupted run.
-                LocalDateTime nextScheduled = task.getNextExecutionTime();
-                if (nextScheduled != null && !nextRetryTime.isBefore(nextScheduled)) {
-                    markSkipped(execution, retryCount + 1, String.format(
-                            "Run was %s when the application stopped, and its retry (due %s) is at or past the "
-                                    + "next scheduled run at %s. Skipping the retry; the task will run on schedule.",
-                            execution.getStatus(), nextRetryTime, nextScheduled));
-                    skipped++;
-                    continue;
+            // The newest resumable run wins and resumes; every older one is superseded by it and
+            // skipped, so the task is never retried more than once for a pile-up of stale rows.
+            TaskExecution winner = resumable.get(0);
+            for (int i = 1; i < resumable.size(); i++) {
+                TaskExecution stale = resumable.get(i);
+                int staleAttempt = (stale.getRetryCount() == null ? 0 : stale.getRetryCount()) + 1;
+                markSkipped(stale, staleAttempt, String.format(
+                        "A newer interrupted run of this task (execution [%d]) was recovered on restart "
+                                + "and will be retried in its place. This older run (execution [%d], %s at "
+                                + "shutdown) is superseded and skipped.",
+                        winner.getId(), stale.getId(), stale.getStatus()));
+                skipped++;
+            }
+
+            // Resume the winner under the same rules a single interrupted run has always followed.
+            try {
+                switch (recoverWinner(winner, now)) {
+                    case RESCHEDULED -> rescheduled++;
+                    case SKIPPED -> skipped++;
+                    case DEAD_LETTERED -> deadLettered++;
                 }
-
-                if (inProgress && exhausted) {
-                    // Crashes used up the budget. A crash never reaches the runtime's failure path,
-                    // so this is the only place that can dead-letter it.
-                    taskExecutorEngine.deadLetterInterrupted(task, execution, retryCount + 1,
-                            "Run was IN_PROGRESS when the application stopped and has no retries left. "
-                                    + "Dead-lettered on restart so it does not re-run indefinitely.");
-                    deadLettered++;
-                    log.warn("RetryQueueEngine: Task [{}] (execution [{}]) exhausted its retries via crashes. Dead-lettered.",
-                            task.getId(), execution.getId());
-                    continue;
-                }
-
-                retryQueue.schedule(new RetryEntry(task.getId(), execution.getId(), resumeRetryCount, nextRetryTime));
-                rescheduled++;
-                log.info("RetryQueueEngine: Recovered {} run for task [{}] (execution [{}], attempt {}, due {}).",
-                        execution.getStatus(), task.getId(), execution.getId(), resumeRetryCount + 1, nextRetryTime);
-
             } catch (Exception ex) {
                 log.error("RetryQueueEngine: Failed to recover execution [{}] on startup. Reason: {}",
-                        execution.getId(), ex.getMessage());
+                        winner.getId(), ex.getMessage());
             }
         }
 
-        log.info("RetryQueueEngine: Startup recovery complete. Re-queued: {} | Skipped: {} | Dead-lettered: {} | Already terminal: {}",
-                rescheduled, skipped, deadLettered, leftAlone);
+        log.info("RetryQueueEngine: Startup recovery complete. Re-queued: {} | Skipped: {} | "
+                + "Dead-lettered: {} | Already terminal: {}", rescheduled, skipped, deadLettered, leftAlone);
+    }
+
+    /**
+     * Resumes the single winning row for a task: reschedules it, skips it if the
+     * task's next scheduled run has already caught up, or dead-letters it if a
+     * crashed {@code IN_PROGRESS} run has used up its whole retry budget.
+     *
+     * @param execution the newest resumable row for its task
+     * @param now       the recovery reference time
+     * @return what was done with the row
+     */
+    private RecoveryOutcome recoverWinner(TaskExecution execution, LocalDateTime now) {
+        Task task = execution.getTask();
+
+        // retryCount is retries, not attempts: the attempt that was running/failed is retryCount + 1,
+        // and exhaustion is retryCount == maxRetries - 1 — the runtime's own DLQ boundary. Both
+        // statuses advance to the next attempt: a FAILED attempt is done, and an interrupted
+        // IN_PROGRESS attempt counts the crash as a consumed retry.
+        int retryCount = execution.getRetryCount() == null ? 0 : execution.getRetryCount();
+        boolean inProgress = execution.getStatus() == ExecutionStatus.IN_PROGRESS;
+        int resumeRetryCount = retryCount + 1;
+        boolean exhausted = retryCount >= maxRetries - 1;
+
+        LocalDateTime nextRetryTime;
+        if (inProgress) {
+            // Process was down, so no delay to wait out — due now.
+            nextRetryTime = now;
+        } else {
+            // FAILED with retries left: the engine had parked a retry we lost with the in-memory
+            // queue, so rebuild it due one delay after the attempt failed.
+            LocalDateTime failedAt = execution.getUpdatedAt() == null ? now : execution.getUpdatedAt();
+            nextRetryTime = failedAt.plus(Duration.ofMillis(retryDelayMs));
+        }
+
+        // A retry at or past the task's next scheduled run is pointless — the fresh run supersedes
+        // it — so skip rather than retry or dead-letter the interrupted run.
+        LocalDateTime nextScheduled = task.getNextExecutionTime();
+        if (nextScheduled != null && !nextRetryTime.isBefore(nextScheduled)) {
+            markSkipped(execution, retryCount + 1, String.format(
+                    "Run was %s when the application stopped, and its retry (due %s) is at or past the "
+                            + "next scheduled run at %s. Skipping the retry; the task will run on schedule.",
+                    execution.getStatus(), nextRetryTime, nextScheduled));
+            return RecoveryOutcome.SKIPPED;
+        }
+
+        if (inProgress && exhausted) {
+            // Crashes used up the budget. A crash never reaches the runtime's failure path, so this
+            // is the only place that can dead-letter it.
+            taskExecutorEngine.deadLetterInterrupted(task, execution, retryCount + 1,
+                    "Run was IN_PROGRESS when the application stopped and has no retries left. "
+                            + "Dead-lettered on restart so it does not re-run indefinitely.");
+            log.warn("RetryQueueEngine: Task [{}] (execution [{}]) exhausted its retries via crashes. "
+                    + "Dead-lettered.", task.getId(), execution.getId());
+            return RecoveryOutcome.DEAD_LETTERED;
+        }
+
+        boolean parked = retryQueue.schedule(
+                new RetryEntry(task.getId(), execution.getId(), resumeRetryCount, nextRetryTime));
+        if (!parked) {
+            // Only one winner per task is ever scheduled, so a pending retry should not already
+            // exist. If one somehow does, don't phantom-count this as re-queued — skip it so it
+            // does not silently reappear on the next boot.
+            markSkipped(execution, retryCount + 1,
+                    "A retry was already pending for this task when startup recovery ran; "
+                            + "this duplicate is skipped.");
+            return RecoveryOutcome.SKIPPED;
+        }
+
+        log.info("RetryQueueEngine: Recovered {} run for task [{}] (execution [{}], attempt {}, due {}).",
+                execution.getStatus(), task.getId(), execution.getId(), resumeRetryCount + 1, nextRetryTime);
+        return RecoveryOutcome.RESCHEDULED;
     }
 
     /**
