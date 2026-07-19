@@ -17,12 +17,14 @@
   --color-status-running:   #FBBC05;   /* Google Yellow — running / processing */
   --color-status-failed:    #EA4335;   /* Google Red    — failed / DLQ */
   --color-status-success:   #34A853;   /* Google Green  — success */
+  --color-status-skipped:   #9AA0A6;   /* Google Grey   — skipped / bypassed */
 
   /* Soft tints for badge backgrounds */
   --color-status-scheduled-soft: #e8f0fe;
   --color-status-running-soft:   #fef9e0;
   --color-status-failed-soft:    #fce8e6;
   --color-status-success-soft:   #e6f4ea;
+  --color-status-skipped-soft:   #f1f3f4;
 
   /* Brand accent — Google Blue */
   --color-accent: #4285F4;

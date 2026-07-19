@@ -6,6 +6,10 @@ It supports three task types: **email notifications**, **database backups**, and
 
 ![Dashboard](docs/dashboard.png)
 
+*Live overview of scheduled tasks and execution outcomes — task and dead-letter
+totals up top, then execution results (successful, skipped, failed) broken out
+for today, this week, and this month.*
+
 ---
 
 ## Contents
@@ -33,7 +37,7 @@ It supports three task types: **email notifications**, **database backups**, and
 - Record every attempt — status, exit code, command output, timestamps — against the execution that produced it
 - Compose emails from reusable templates with per-task placeholder data
 - Export the dead letter queue to XLSX over a date range, for triage outside the app
-- Surface task, execution, email, and DLQ counts on a dashboard, with a success-versus-failure chart
+- Surface task, execution, and DLQ counts on a dashboard, with execution outcomes (successful, skipped, failed) broken out for today, this week, and this month
 
 ---
 
@@ -51,7 +55,7 @@ Adding a fourth means implementing `TaskHandler` and registering it — `TaskHan
 
 ## Architecture
 
-![Architecture](docs/task_scheduler_architecture.svg)
+![Architecture](docs/task_scheduler_architecture_final.svg)
 
 The system has **two independent entry points** that meet only at the database:
 
@@ -94,7 +98,9 @@ A run keeps one `task_executions` row across all its attempts, staying `IN_PROGR
 
 **Retries don't hold a thread.** A failed attempt isn't slept off on the worker that ran it — it's parked in an in-memory retry queue stamped with a due time, and the worker returns to the pool at once. A light sweep (every `retry-queue-poll-ms`, default 1s) moves due retries back onto the main queue, so the delay is enforced by a timestamp rather than by pinning a thread; a long delay across many failing tasks can no longer starve the pool. A retry that would land on top of the task's next scheduled run — because retries dragged past it, or because a fresh run is already in flight — is dropped and its execution marked `SKIPPED`, with both the intended retry time and the scheduled time recorded in `task_execution_logs`. The task just carries on with its schedule rather than running twice.
 
-**Interrupted runs resume after a restart.** The retry queue is in-memory, so a crash loses it; on startup it is rebuilt from the execution rows the previous process left behind. Both an `IN_PROGRESS` row and a `FAILED` row with retries left advance to their next attempt — for an interrupted `IN_PROGRESS` run the crash counts as a consumed retry, so a run that only ever crashes eventually exhausts its budget and is dead-lettered on restart instead of tying up a thread forever. `IN_PROGRESS` retries are due immediately; `FAILED` retries wait out the remaining delay; either is `SKIPPED` instead if its next scheduled run has already come round. A `FAILED` row whose retries are spent is already in the DLQ, so it is left alone.
+**Interrupted runs resume after a restart.** The retry queue is in-memory, so a crash loses it; on startup it is rebuilt from the execution rows the previous process left behind. An `IN_PROGRESS` row, or a `FAILED` row with retries left, advances to its next attempt — for an interrupted `IN_PROGRESS` run the crash counts as a consumed retry, so a run that only ever crashes eventually exhausts its budget and is dead-lettered on restart instead of tying up a thread forever. `IN_PROGRESS` retries are due immediately; `FAILED` retries wait out the remaining delay; either is `SKIPPED` instead if its next scheduled run has already come round. A `FAILED` row whose retries are spent is already in the DLQ, so it is left alone.
+
+Because each scheduled occurrence records its own execution row, a task can leave several recoverable rows behind after repeated restarts. They are grouped by task and only the newest resumes; the older ones are superseded and marked `SKIPPED`, their log naming the row that replaced them — so a pile-up of stale rows resolves once on the first startup rather than fanning out into duplicate retries that reappear on every boot.
 
 The DLQ is reviewable in the UI, movable through `NEW → IN_PROGRESS → ANALYSED → FIXED`, and exportable to XLSX by date range.
 
@@ -106,7 +112,7 @@ Timeouts are enforced by draining the process's output on a separate thread whil
 
 ## Data model
 
-![ERD](docs/Task_Scheduler_ERD_final.drawio.png)
+![ERD](docs/Task_Scheduler_ERD.drawio.png)
 
 Twelve tables across four groups:
 
@@ -125,7 +131,7 @@ Schema is managed by Flyway with `ddl-auto: validate`, so an entity that drifts 
 
 **Backend** — Java 25, Spring Boot 4.0.6, Spring Security (JWT via jjwt), Spring Data JPA, Flyway, Apache POI (XLSX export), springdoc-openapi, Maven
 
-**Frontend** — React 19, Vite 6, React Router 7, Tailwind CSS 4, Axios, Recharts, lucide-react
+**Frontend** — React 19, Vite 6, React Router 7, Tailwind CSS 4, Axios, lucide-react
 
 **Database** — MySQL 8
 

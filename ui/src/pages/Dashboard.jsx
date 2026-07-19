@@ -1,9 +1,29 @@
 import { useEffect, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { analyticsApi } from '../api/analytics'
 import { getErrorMessage } from '../api/client'
 import { StatCard, PageHeader, LoadingState } from '../components/PageElements'
 import { ErrorBanner } from '../components/FormControls'
+
+const headingColor = { color: 'var(--color-heading)' }
+
+function SectionHeading({ children }) {
+  return (
+    <h2 className="mb-3 text-base font-semibold" style={headingColor}>
+      {children}
+    </h2>
+  )
+}
+
+function ExecutionStats({ stats }) {
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <StatCard label="Executions" value={stats.totalExecutions} accent="running" />
+      <StatCard label="Successful" value={stats.successfulExecutions} accent="success" />
+      <StatCard label="Skipped" value={stats.skippedExecutions} accent="skipped" />
+      <StatCard label="Failed" value={stats.failedExecutions} accent="failed" />
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const [data, setData] = useState(null)
@@ -20,18 +40,11 @@ export default function Dashboard() {
 
   if (loading) return <LoadingState />
 
-  const chartData = data
+  const periods = data
     ? [
-        {
-          name: 'Executions',
-          Completed: data.successfulExecutions,
-          Failed: data.failedExecutions,
-        },
-        {
-          name: 'Emails',
-          Completed: data.successfulEmails,
-          Failed: data.failedEmails,
-        },
+        { label: 'Today', stats: data.today },
+        { label: 'This Week', stats: data.thisWeek },
+        { label: 'This Month', stats: data.thisMonth },
       ]
     : []
 
@@ -39,52 +52,27 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title="Dashboard"
-        description="Live overview of scheduled tasks, executions, and notifications"
+        description="Live overview of scheduled tasks and execution outcomes"
       />
 
       <ErrorBanner message={error} />
 
       {data && (
         <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <StatCard label="Total Tasks" value={data.totalTasks} accent="scheduled" />
-            <StatCard label="Total Executions" value={data.totalExecutions} accent="running" />
-            <StatCard
-              label="Successful Executions"
-              value={data.successfulExecutions}
-              accent="success"
-            />
-            <StatCard label="Failed Executions" value={data.failedExecutions} accent="failed" />
-            <StatCard label="Emails Sent" value={data.totalEmailsSent} accent="scheduled" />
-            <StatCard
-              label="Emails Delivered"
-              value={data.successfulEmails}
-              accent="success"
-            />
-            <StatCard label="Emails Failed" value={data.failedEmails} accent="failed" />
-            <StatCard label="DLQ Entries" value={data.totalDlqEntries} accent="failed" />
-          </div>
+          <section>
+            <SectionHeading>Overview</SectionHeading>
+            <div className="grid grid-cols-2 gap-4">
+              <StatCard label="Total Tasks" value={data.totalTasks} accent="scheduled" />
+              <StatCard label="DLQ Entries" value={data.totalDlqEntries} accent="failed" />
+            </div>
+          </section>
 
-          <div className="mt-8 rounded-xl border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface)] p-6">
-            <h2 className="mb-4 text-base font-semibold">Success vs Failure</h2>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border-soft)" />
-                <XAxis dataKey="name" stroke="var(--color-ink-muted)" fontSize={12} />
-                <YAxis stroke="var(--color-ink-muted)" fontSize={12} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'var(--color-surface-raised)',
-                    border: '1px solid var(--color-border-soft)',
-                    borderRadius: '8px',
-                    fontSize: '13px',
-                  }}
-                />
-                <Bar dataKey="Completed" fill="var(--color-status-success)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Failed" fill="var(--color-status-failed)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {periods.map(({ label, stats }) => (
+            <section key={label} className="mt-6">
+              <SectionHeading>{label}</SectionHeading>
+              <ExecutionStats stats={stats} />
+            </section>
+          ))}
         </>
       )}
     </div>
