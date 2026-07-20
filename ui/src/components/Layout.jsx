@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, ListChecks, FileText,
-  Database, Mail, HardDriveDownload, FileBarChart2, History, AlertTriangle, LogOut,
+  Database, Mail, HardDriveDownload, FileBarChart2, History, AlertTriangle, LogOut, CircleUser,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -44,7 +44,7 @@ function LogoWordmark({ size = 'base' }) {
 }
 
 export default function Layout() {
-  const { logout } = useAuth()
+  const { logout, username } = useAuth()
   const navigate = useNavigate()
 
   return (
@@ -97,16 +97,12 @@ export default function Layout() {
       {/* Main */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="flex items-center justify-between border-b border-[color:var(--color-border-soft)] bg-white px-8 py-3 shadow-sm">
+        <header className="flex items-center justify-end border-b border-[color:var(--color-border-soft)] bg-white px-8 py-3 shadow-sm">
           <div className="flex items-center gap-2">
-            <span className="pulse-dot" />
-            <span className="text-xs text-[color:var(--color-ink-muted)] font-[var(--font-mono)]">
-              scheduler running
+            <CircleUser size={18} className="text-[color:var(--color-ink-muted)]" />
+            <span className="text-sm font-medium text-[color:var(--color-ink)]">
+              {username ?? 'Account'}
             </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <LogoMark size={24} />
-            <LogoWordmark size="sm" />
           </div>
         </header>
 
